@@ -4,4 +4,3 @@ version = "0.1.0"
 authors = ["long-long-float <niinikazuki@yahoo.co.jp>"]
 
 [dependencies]
-nom = "~3.2"
