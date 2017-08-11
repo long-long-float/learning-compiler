@@ -6,12 +6,12 @@ trait Operand {
 
 #[derive(Clone)]
 struct Register {
-    id: i32,     // 1 base
+    id: usize,     // 1 base
     size: usize,
 }
 
 impl Register {
-    fn new(id: i32) -> Register {
+    fn new(id: usize) -> Register {
         Register {
             id: id,
             size: 32,
@@ -54,6 +54,7 @@ enum OpeCode {
     LdI { dst: Register, value: Integer },
     Store { dst: Integer, src: Register },
     Load { dst: Register, src: Integer },
+    Print { src: Register },
 }
 
 impl OpeCode {
@@ -117,19 +118,19 @@ macro_rules! int {
     };
 }
 
-const REGISTER_NUM: i32 = 4;
+const REGISTER_NUM: usize = 4;
 
-// 先頭からN-1までのレジスタを割り当てて、残りは1つのレジスタを使いStore, Loadする
+// 先頭からN-2までのレジスタを割り当てて、残りはStore, Loadしてメモリに置く
 fn allocate_registers1(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
     let mut result: Vec<OpeCode> = Vec::new();
 
     // register id -> address
-    let mut reg_addr_map: HashMap<i32, usize> = HashMap::new();
+    let mut reg_addr_map: HashMap<usize, usize> = HashMap::new();
 
-    let temp_reg = REGISTER_NUM;
+    let alloc_dst_reg = |reg: Register, reg_addr_map: &mut HashMap<usize, usize>| {
+        let temp_reg = REGISTER_NUM - 1;
 
-    let mut alloc_dst_reg = |reg: Register, reg_addr_map: &mut HashMap<i32, usize>| {
-        if reg.id <= REGISTER_NUM - 1 {
+        if reg.id <= REGISTER_NUM - 2 {
             (reg, None)
         } else {
             let new_addr = reg_addr_map.len();
@@ -139,8 +140,8 @@ fn allocate_registers1(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
         }
     };
 
-    let mut alloc_src_reg = |reg: Register, reg_addr_map: &mut HashMap<i32, usize>, result: &mut Vec<OpeCode>| {
-        if reg.id <= REGISTER_NUM - 1 {
+    let alloc_src_reg = |reg: Register, temp_reg: usize, reg_addr_map: &mut HashMap<usize, usize>, result: &mut Vec<OpeCode>| {
+        if reg.id <= REGISTER_NUM - 2 {
             reg
         } else {
             let new_addr = reg_addr_map.len();
@@ -166,8 +167,8 @@ fn allocate_registers1(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
                 }
             },
             OpeCode::Add { dst, src1, src2 } => {
-                let src1 = alloc_src_reg(src1, &mut reg_addr_map, &mut result);
-                let src2 = alloc_src_reg(src2, &mut reg_addr_map, &mut result);
+                let src1 = alloc_src_reg(src1, REGISTER_NUM - 1, &mut reg_addr_map, &mut result);
+                let src2 = alloc_src_reg(src2, REGISTER_NUM,     &mut reg_addr_map, &mut result);
 
                 match alloc_dst_reg(dst, &mut reg_addr_map) {
                     (reg, None) => result.push(OpeCode::Add{ dst: reg, src1: src1, src2: src2 }),
@@ -177,7 +178,23 @@ fn allocate_registers1(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
                     },
                 }
             },
-            _ => {}
+            OpeCode::Store { dst, src } => {
+                let src = alloc_src_reg(src, REGISTER_NUM, &mut reg_addr_map, &mut result);
+                result.push(OpeCode::Store{ dst: dst, src: src });
+            },
+            OpeCode::Load { dst, src } => {
+                match alloc_dst_reg(dst, &mut reg_addr_map) {
+                    (reg, None) => result.push(OpeCode::Load{ dst: reg, src: src }),
+                    (reg, Some(addr)) => {
+                        result.push(OpeCode::Load{ dst: reg.clone(), src: src });
+                        result.push(OpeCode::Store{ dst: addr, src: reg });
+                    },
+                }
+            },
+            OpeCode::Print { src } => {
+                let src = alloc_src_reg(src, REGISTER_NUM, &mut reg_addr_map, &mut result);
+                result.push(OpeCode::Print{ src: src });
+            },
         }
     }
 
@@ -185,7 +202,40 @@ fn allocate_registers1(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
 }
 
 fn run_vm(opcodes: Vec<OpeCode>) {
+    let mut reg = [0; REGISTER_NUM + 1];
+    let mut mem = [0; 1024];
+
     for opcode in &opcodes {
+        let opcode = opcode.clone();
+        match opcode {
+            OpeCode::LdI { dst, value } => {
+                reg[dst.id] = value.value;
+            },
+            OpeCode::Add { dst, src1, src2 } => {
+                reg[dst.id] = reg[src1.id] + reg[src2.id];
+            },
+            OpeCode::Store { dst, src } => {
+                mem[dst.value as usize] = reg[src.id];
+            },
+            OpeCode::Load { dst, src } => {
+                reg[dst.id] = mem[src.value as usize];
+            },
+            OpeCode::Print { src } => {
+                println!("{}", reg[src.id]);
+            },
+        }
+    }
+
+    println!("");
+    println!("registers");
+    for i in 1..reg.len() {
+        println!("  %{} = {}", i, reg[i]);
+    }
+    println!("memory");
+    for addr in 0..mem.len() {
+        if mem[addr] != 0 {
+            println!("  {}: {}", addr, mem[addr]);
+        }
     }
 }
 
@@ -199,6 +249,8 @@ fn main() {
         OpeCode::Add{ dst: reg!(5), src1: reg!(1), src2: reg!(2)},
         OpeCode::Add{ dst: reg!(6), src1: reg!(5), src2: reg!(3)},
         OpeCode::Add{ dst: reg!(7), src1: reg!(6), src2: reg!(4)},
+
+        OpeCode::Print{ src: reg!(7) },
     ];
 
     for opcode in &opcodes {
