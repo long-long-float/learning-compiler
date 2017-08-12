@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 
 trait Operand {
@@ -212,6 +213,18 @@ impl LiveRangeCell {
     }
 }
 
+fn is_empty<T: PartialEq>(matrix_graph: &Vec<Vec<T>>, null_value: T) -> bool {
+    for row in matrix_graph {
+        for elem in row {
+            if elem != &null_value {
+                return false
+            }
+        }
+    }
+    return true
+}
+
+// Chatinのアルゴリズム(干渉グラフを用いる)
 fn allocate_registers2(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
     // レジスタは1から順に使用されていると仮定
     let register_num = opcodes.iter().map(|op| {
@@ -219,13 +232,16 @@ fn allocate_registers2(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
             OpeCode::Add { dst, src1, src2 } => {
                 vec![dst, src1, src2].iter().max_by_key(|reg| reg.id).unwrap().id
             },
-            OpeCode::LdI { dst, value } => dst.id,
-            OpeCode::Store { dst, src } => src.id,
-            OpeCode::Load { dst, src } => dst.id,
+            OpeCode::LdI { dst, value: _ } => dst.id,
+            OpeCode::Store { dst: _, src } => src.id,
+            OpeCode::Load { dst, src: _ } => dst.id,
             OpeCode::Print { src } => src.id,
         }
     }).max().unwrap() + 1;
 
+    // X
+
+    // 生存区間の生成
     let mut live_range: Vec<Vec<LiveRangeCell>> = Vec::new();
     for _ in 0..register_num {
         let mut row: Vec<LiveRangeCell> = Vec::new();
@@ -240,13 +256,13 @@ fn allocate_registers2(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
                 live_range[src1.id][i] = LiveRangeCell::Live;
                 live_range[src2.id][i] = LiveRangeCell::Live;
             },
-            OpeCode::LdI { dst, value } => {
+            OpeCode::LdI { dst, value: _ } => {
                 live_range[dst.id][i]  = LiveRangeCell::Birth;
             },
-            OpeCode::Store { dst, src } => {
+            OpeCode::Store { dst: _, src } => {
                 live_range[src.id][i]  = LiveRangeCell::Live;
             },
-            OpeCode::Load { dst, src } => {
+            OpeCode::Load { dst, src: _ } => {
                 live_range[dst.id][i]  = LiveRangeCell::Birth;
             },
             OpeCode::Print { src } => {
@@ -282,25 +298,25 @@ fn allocate_registers2(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
         }
     }
 
-    for (reg_id, row) in live_range.iter().enumerate() {
-        if reg_id == 0 {
-            continue;
-        }
+    // for (reg_id, row) in live_range.iter().enumerate() {
+    //     if reg_id == 0 {
+    //         continue;
+    //     }
+    //
+    //     print!("{}: ", reg_id);
+    //     for cell in row.iter() {
+    //         let ch = match *cell {
+    //             LiveRangeCell::Dead => '.',
+    //             LiveRangeCell::Birth => '*',
+    //             LiveRangeCell::Live => '-',
+    //             LiveRangeCell::EndPoint => 'x',
+    //         };
+    //         print!("{}", ch);
+    //     }
+    //     println!("");
+    // }
 
-        print!("{}: ", reg_id);
-        for cell in row.iter() {
-            let ch = match *cell {
-                LiveRangeCell::Dead => '.',
-                LiveRangeCell::Birth => '*',
-                LiveRangeCell::Live => '-',
-                LiveRangeCell::EndPoint => 'x',
-            };
-            print!("{}", ch);
-        }
-        println!("");
-    }
-
-    // 干渉グラフ
+    // 干渉グラフの生成
     let mut interf_matrix: Vec<Vec<bool>> = Vec::new();
     for _ in 0..register_num {
         let mut row: Vec<bool> = Vec::new();
@@ -316,26 +332,118 @@ fn allocate_registers2(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
 
             for i in 0..row1.len() {
                 if row1[i].is_live() && row2[i].is_live() {
-                    let (reg_id1, reg_id2) = if reg_id1 > reg_id2 {
-                            (reg_id2, reg_id1)
-                        } else {
-                            (reg_id1, reg_id2)
-                        };
-
                     interf_matrix[reg_id1][reg_id2] = true;
+                    interf_matrix[reg_id2][reg_id1] = true;
                 }
             }
         }
     }
 
-    for row in &interf_matrix {
-        for cell in row {
-            print!("{}", if *cell { 'X' } else { '.' });
+    // for (i, row) in interf_matrix.iter().enumerate() {
+    //     for (j, cell) in row.iter().enumerate() {
+    //         let ch = if *cell {
+    //                 'X'
+    //             } else if i == j {
+    //                 '\\'
+    //             } else {
+    //                 '.'
+    //             };
+    //         print!("{}", ch);
+    //     }
+    //     println!("");
+    // }
+
+    let mut spill_list: Vec<usize> = Vec::new();
+    let mut removed_regs: Vec<usize> = Vec::new();
+
+    let mut interf_matrix_cloned = interf_matrix.clone();
+
+    while !is_empty(&interf_matrix_cloned, false) || removed_regs.len() < register_num {
+        // iとつながっているノードの個数
+        let im = interf_matrix_cloned.clone();
+        let degs = im.iter().map(|row| row.iter().filter(|&&cell| cell).count()).collect::<Vec<_>>();
+
+        let reg_id = degs.iter().enumerate().position(|(reg_id, &deg)| {
+                deg < REGISTER_NUM && removed_regs.iter().find(|&&r| r == reg_id) == None
+            })
+            .unwrap_or_else(|| {
+                let reg_id = degs.iter().position(|&deg| deg >= REGISTER_NUM).unwrap();
+                spill_list.push(reg_id);
+                reg_id
+            });
+        // 干渉グラフからreg_idを取り除く
+        for i in 0..register_num {
+            interf_matrix_cloned[i][reg_id] = false;
+            interf_matrix_cloned[reg_id][i] = false;
         }
-        println!("");
+        removed_regs.push(reg_id);
     }
 
+    let mut reg_map: HashMap<usize, usize> = HashMap::new();
+
+    if spill_list.len() == 0 {
+        // 塗る
+        for &reg_id in removed_regs.iter().rev() {
+            let mut is_painted: Vec<bool> = Vec::new();
+            is_painted.resize(REGISTER_NUM + 1, false);
+
+            for (reg_id2, &connected) in interf_matrix[reg_id].iter().enumerate() {
+                if connected {
+                    if let Some(&color) = reg_map.get(&reg_id2) {
+                        is_painted[color] = true;
+                    }
+                }
+            }
+
+            let mut color = 1;
+            for _ in 0..is_painted.len() {
+                if !is_painted[color] {
+                    break;
+                }
+                color += 1;
+            }
+
+            reg_map.insert(reg_id, color);
+        }
+    } else {
+        // TODO
+        // spill_listの各ノードxの生存区間を分割する
+        // Xまで戻る
+    }
+
+    // for (r1, r2) in &reg_map {
+    //     println!("{} -> {}", r1, r2);
+    // }
+
     let mut result: Vec<OpeCode> = Vec::new();
+
+    for opcode in &opcodes {
+        let opcode = opcode.clone();
+        match opcode {
+            OpeCode::LdI { dst, value } => {
+                let &dst = reg_map.get(&dst.id).unwrap();
+                result.push(OpeCode::LdI{ dst: reg!(dst), value: value });
+            },
+            OpeCode::Add { dst, src1, src2 } => {
+                let &dst = reg_map.get(&dst.id).unwrap();
+                let &src1 = reg_map.get(&src1.id).unwrap();
+                let &src2 = reg_map.get(&src2.id).unwrap();
+                result.push(OpeCode::Add{ dst: reg!(dst), src1: reg!(src1), src2: reg!(src2) });
+            },
+            OpeCode::Store { dst, src } => {
+                let &src = reg_map.get(&src.id).unwrap();
+                result.push(OpeCode::Store{ dst: dst, src: reg!(src) });
+            },
+            OpeCode::Load { dst, src } => {
+                let &dst = reg_map.get(&dst.id).unwrap();
+                result.push(OpeCode::Load{ dst: reg!(dst), src: src });
+            },
+            OpeCode::Print { src } => {
+                let &src = reg_map.get(&src.id).unwrap();
+                result.push(OpeCode::Print{ src: reg!(src) });
+            },
+        }
+    }
 
     result
 }
