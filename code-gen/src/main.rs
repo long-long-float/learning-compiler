@@ -201,6 +201,145 @@ fn allocate_registers1(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
     result
 }
 
+#[derive(Clone, PartialEq)]
+enum LiveRangeCell {
+    Dead, Birth, Live, EndPoint
+}
+
+impl LiveRangeCell {
+    fn is_live(&self) -> bool {
+        self == &LiveRangeCell::Birth || self == &LiveRangeCell::Live
+    }
+}
+
+fn allocate_registers2(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
+    // レジスタは1から順に使用されていると仮定
+    let register_num = opcodes.iter().map(|op| {
+        match op.clone() {
+            OpeCode::Add { dst, src1, src2 } => {
+                vec![dst, src1, src2].iter().max_by_key(|reg| reg.id).unwrap().id
+            },
+            OpeCode::LdI { dst, value } => dst.id,
+            OpeCode::Store { dst, src } => src.id,
+            OpeCode::Load { dst, src } => dst.id,
+            OpeCode::Print { src } => src.id,
+        }
+    }).max().unwrap() + 1;
+
+    let mut live_range: Vec<Vec<LiveRangeCell>> = Vec::new();
+    for _ in 0..register_num {
+        let mut row: Vec<LiveRangeCell> = Vec::new();
+        row.resize(opcodes.len(), LiveRangeCell::Dead);
+        live_range.push(row);
+    }
+
+    for (i, opcode) in opcodes.iter().enumerate() {
+        match opcode.clone() {
+            OpeCode::Add { dst, src1, src2 } => {
+                live_range[dst.id][i]  = LiveRangeCell::Birth;
+                live_range[src1.id][i] = LiveRangeCell::Live;
+                live_range[src2.id][i] = LiveRangeCell::Live;
+            },
+            OpeCode::LdI { dst, value } => {
+                live_range[dst.id][i]  = LiveRangeCell::Birth;
+            },
+            OpeCode::Store { dst, src } => {
+                live_range[src.id][i]  = LiveRangeCell::Live;
+            },
+            OpeCode::Load { dst, src } => {
+                live_range[dst.id][i]  = LiveRangeCell::Birth;
+            },
+            OpeCode::Print { src } => {
+                live_range[src.id][i]  = LiveRangeCell::Live;
+            },
+        }
+    }
+
+    let mut living: Vec<bool> = Vec::new();
+    living.resize(register_num, false);
+
+    for reg_id in 0..live_range.len() {
+        let row = &mut live_range[reg_id];
+        for i in (0..row.len()).rev() {
+            let cell = row[i].clone();
+            match cell {
+                LiveRangeCell::Dead => {
+                    if living[reg_id] {
+                        row[i] = LiveRangeCell::Live;
+                    }
+                },
+                LiveRangeCell::Live => {
+                    if !living[reg_id] {
+                        row[i] = LiveRangeCell::EndPoint;
+                    }
+                    living[reg_id] = true;
+                },
+                LiveRangeCell::Birth => {
+                    living[reg_id] = false;
+                },
+                LiveRangeCell::EndPoint => {},
+            }
+        }
+    }
+
+    for (reg_id, row) in live_range.iter().enumerate() {
+        if reg_id == 0 {
+            continue;
+        }
+
+        print!("{}: ", reg_id);
+        for cell in row.iter() {
+            let ch = match *cell {
+                LiveRangeCell::Dead => '.',
+                LiveRangeCell::Birth => '*',
+                LiveRangeCell::Live => '-',
+                LiveRangeCell::EndPoint => 'x',
+            };
+            print!("{}", ch);
+        }
+        println!("");
+    }
+
+    // 干渉グラフ
+    let mut interf_matrix: Vec<Vec<bool>> = Vec::new();
+    for _ in 0..register_num {
+        let mut row: Vec<bool> = Vec::new();
+        row.resize(register_num, false);
+        interf_matrix.push(row);
+    }
+
+    for (reg_id1, row1) in live_range.clone().iter().enumerate() {
+        for (reg_id2, row2) in live_range.iter().enumerate() {
+            if reg_id1 == reg_id2 {
+                continue
+            }
+
+            for i in 0..row1.len() {
+                if row1[i].is_live() && row2[i].is_live() {
+                    let (reg_id1, reg_id2) = if reg_id1 > reg_id2 {
+                            (reg_id2, reg_id1)
+                        } else {
+                            (reg_id1, reg_id2)
+                        };
+
+                    interf_matrix[reg_id1][reg_id2] = true;
+                }
+            }
+        }
+    }
+
+    for row in &interf_matrix {
+        for cell in row {
+            print!("{}", if *cell { 'X' } else { '.' });
+        }
+        println!("");
+    }
+
+    let mut result: Vec<OpeCode> = Vec::new();
+
+    result
+}
+
 fn run_vm(opcodes: Vec<OpeCode>) {
     let mut reg = [0; REGISTER_NUM + 1];
     let mut mem = [0; 1024];
@@ -250,7 +389,7 @@ fn main() {
         OpeCode::Add{ dst: reg!(6), src1: reg!(5), src2: reg!(3)},
         OpeCode::Add{ dst: reg!(7), src1: reg!(6), src2: reg!(4)},
 
-        OpeCode::Print{ src: reg!(7) },
+        OpeCode::Print{ src: reg!(7) }, // => 10
     ];
 
     for opcode in &opcodes {
@@ -259,7 +398,8 @@ fn main() {
 
     println!("");
 
-    let opcodes2 = allocate_registers1(opcodes);
+    // let opcodes2 = allocate_registers1(opcodes);
+    let opcodes2 = allocate_registers2(opcodes);
 
     for opcode in &opcodes2 {
         println!("{}", opcode.to_string());
