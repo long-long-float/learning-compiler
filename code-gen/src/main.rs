@@ -119,10 +119,8 @@ macro_rules! int {
     };
 }
 
-const REGISTER_NUM: usize = 4;
-
 // 先頭からN-2までのレジスタを割り当てて、残りはStore, Loadしてメモリに置く
-fn allocate_registers1(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
+fn allocate_registers1(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCode> {
     let mut result: Vec<OpeCode> = Vec::new();
 
     // register id -> address
@@ -229,7 +227,7 @@ fn is_empty<T: PartialEq>(matrix_graph: &Vec<Vec<T>>, null_value: T) -> bool {
 }
 
 // Chatinのアルゴリズム(干渉グラフを用いる)
-fn allocate_registers2(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
+fn allocate_registers2(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCode> {
     // レジスタは1から順に使用されていると仮定
     let register_num = opcodes.iter().map(|op| {
         match op.clone() {
@@ -301,26 +299,29 @@ fn allocate_registers2(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
     }
 
     let mut reg_map: HashMap<usize, usize> = HashMap::new();
+    let mut spilled_reg: Vec<usize> = Vec::new();
 
     loop {
-        for (reg_id, row) in live_range.iter().enumerate() {
-            if reg_id == 0 {
-                continue;
-            }
+        let register_num = live_range.len();
 
-            print!("{}: ", reg_id);
-            for cell in row.iter() {
-                let ch = match *cell {
-                    LiveRangeCell::Dead => '.',
-                    LiveRangeCell::Birth => '*',
-                    LiveRangeCell::Live => '-',
-                    LiveRangeCell::Used => '=',
-                    LiveRangeCell::EndPoint => 'x',
-                };
-                print!("{}", ch);
-            }
-            println!("");
-        }
+        // for (reg_id, row) in live_range.iter().enumerate() {
+        //     if reg_id == 0 {
+        //         continue;
+        //     }
+        //
+        //     print!("{:02}: ", reg_id);
+        //     for cell in row.iter() {
+        //         let ch = match *cell {
+        //             LiveRangeCell::Dead => '.',
+        //             LiveRangeCell::Birth => '*',
+        //             LiveRangeCell::Live => '-',
+        //             LiveRangeCell::Used => '=',
+        //             LiveRangeCell::EndPoint => 'x',
+        //         };
+        //         print!("{}", ch);
+        //     }
+        //     println!("");
+        // }
 
         // 干渉グラフの生成
         let mut interf_matrix: Vec<Vec<bool>> = Vec::new();
@@ -345,19 +346,23 @@ fn allocate_registers2(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
             }
         }
 
-        for (i, row) in interf_matrix.iter().enumerate() {
-            for (j, cell) in row.iter().enumerate() {
-                let ch = if *cell {
-                        'X'
-                    } else if i == j {
-                        '\\'
-                    } else {
-                        '.'
-                    };
-                print!("{}", ch);
-            }
-            println!("");
-        }
+        // for (i, row) in interf_matrix.iter().enumerate() {
+        //     for (j, cell) in row.iter().enumerate() {
+        //         if i == 0 || j == 0 {
+        //             continue;
+        //         }
+        //
+        //         let ch = if *cell {
+        //                 'X'
+        //             } else if i == j {
+        //                 '\\'
+        //             } else {
+        //                 '.'
+        //             };
+        //         print!("{}", ch);
+        //     }
+        //     println!("");
+        // }
 
         let mut spill_list: Vec<usize> = Vec::new();
         let mut removed_regs: Vec<usize> = Vec::new();
@@ -369,11 +374,13 @@ fn allocate_registers2(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
             let im = interf_matrix_cloned.clone();
             let degs = im.iter().map(|row| row.iter().filter(|&&cell| cell).count()).collect::<Vec<_>>();
 
+            let threshold = REGISTER_NUM - 2;
+
             let reg_id = degs.iter().enumerate().position(|(reg_id, &deg)| {
-                    deg < REGISTER_NUM && removed_regs.iter().find(|&&r| r == reg_id) == None
+                    deg < threshold && removed_regs.iter().find(|&&r| r == reg_id) == None
                 })
                 .unwrap_or_else(|| {
-                    let reg_id = degs.iter().position(|&deg| deg >= REGISTER_NUM).unwrap();
+                    let reg_id = degs.iter().position(|&deg| deg >= threshold).unwrap();
                     spill_list.push(reg_id);
                     reg_id
                 });
@@ -384,7 +391,6 @@ fn allocate_registers2(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
             }
             removed_regs.push(reg_id);
         }
-
 
         if spill_list.len() == 0 {
             // 塗る
@@ -413,42 +419,25 @@ fn allocate_registers2(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
 
             break;
         } else {
-            // spill_listの各ノードxの生存区間を分割する
+            // spill
+            // for &reg_id in &spill_list {
+            //     for i in 0..live_range[reg_id].len() {
+            //         if live_range[reg_id][i].is_used() {
+            //             let mut new_range: Vec<LiveRangeCell> = Vec::new();
+            //             new_range.resize(opcodes.len(), LiveRangeCell::Dead);
+            //             new_range[i] = LiveRangeCell::Birth;
+            //             live_range.push(new_range);
+            //         }
+            //     }
+            // }
+
+            spilled_reg = spill_list.clone();
+
             for &reg_id in &spill_list {
                 for i in 0..live_range[reg_id].len() {
-                    if live_range[reg_id][i].is_used() {
-                        let mut new_range: Vec<LiveRangeCell> = Vec::new();
-                        new_range.resize(opcodes.len(), LiveRangeCell::Dead);
-                        new_range[i] = LiveRangeCell::Birth;
-                        live_range.push(new_range);
-                    }
+                    live_range[reg_id][i] = LiveRangeCell::Dead;
                 }
             }
-
-            for &reg_id in &spill_list {
-                live_range.remove(reg_id);
-            }
-
-            for (reg_id, row) in live_range.iter().enumerate() {
-                if reg_id == 0 {
-                    continue;
-                }
-
-                print!("{:02}: ", reg_id);
-                for cell in row.iter() {
-                    let ch = match *cell {
-                        LiveRangeCell::Dead => '.',
-                        LiveRangeCell::Birth => '*',
-                        LiveRangeCell::Live => '-',
-                        LiveRangeCell::Used => '=',
-                        LiveRangeCell::EndPoint => 'x',
-                    };
-                    print!("{}", ch);
-                }
-                println!("");
-            }
-
-            break;
         }
     }
 
@@ -456,32 +445,93 @@ fn allocate_registers2(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
     //     println!("{} -> {}", r1, r2);
     // }
 
+    for &reg_id in &spilled_reg {
+        println!("{}", reg_id);
+    }
+
     let mut result: Vec<OpeCode> = Vec::new();
+
+    // register id -> address
+    let mut reg_addr_map: HashMap<usize, usize> = HashMap::new();
+
+    // for spilled registers
+    let alloc_dst_reg = |reg_id: usize, original_reg_id: usize, reg_addr_map: &mut HashMap<usize, usize>| {
+        let temp_reg = REGISTER_NUM - 1;
+
+        if spilled_reg.iter().find(|&&r| r == reg_id) == None {
+            (reg!(reg_id), None)
+        } else {
+            let new_addr = reg_addr_map.len();
+            reg_addr_map.entry(original_reg_id).or_insert(new_addr);
+
+            (reg!(temp_reg), Some(Integer::new(*reg_addr_map.get(&original_reg_id).unwrap() as i32)))
+        }
+    };
+
+    let alloc_src_reg = |reg_id: usize, original_reg_id: usize, temp_reg: usize, reg_addr_map: &mut HashMap<usize, usize>, result: &mut Vec<OpeCode>| {
+        if spilled_reg.iter().find(|&&r| r == reg_id) == None {
+            reg!(reg_id)
+        } else {
+            let new_addr = reg_addr_map.len();
+            reg_addr_map.entry(original_reg_id).or_insert(new_addr);
+
+            let addr = Integer::new(*reg_addr_map.get(&original_reg_id).unwrap() as i32);
+            result.push(OpeCode::Load{ dst: reg!(temp_reg), src: addr });
+
+            reg!(temp_reg)
+        }
+    };
 
     for opcode in &opcodes {
         let opcode = opcode.clone();
         match opcode {
             OpeCode::LdI { dst, value } => {
-                let &dst = reg_map.get(&dst.id).unwrap();
-                result.push(OpeCode::LdI{ dst: reg!(dst), value: value });
+                let &mdst = reg_map.get(&dst.id).unwrap();
+
+                match alloc_dst_reg(mdst, dst.id, &mut reg_addr_map) {
+                    (reg, None) => result.push(OpeCode::LdI{ dst: reg, value: value }),
+                    (reg, Some(addr)) => {
+                        result.push(OpeCode::LdI{ dst: reg.clone(), value: value});
+                        result.push(OpeCode::Store{ dst: addr, src: reg});
+                    },
+                }
             },
             OpeCode::Add { dst, src1, src2 } => {
-                let &dst = reg_map.get(&dst.id).unwrap();
-                let &src1 = reg_map.get(&src1.id).unwrap();
-                let &src2 = reg_map.get(&src2.id).unwrap();
-                result.push(OpeCode::Add{ dst: reg!(dst), src1: reg!(src1), src2: reg!(src2) });
+                let &mdst = reg_map.get(&dst.id).unwrap();
+                let &msrc1 = reg_map.get(&src1.id).unwrap();
+                let &msrc2 = reg_map.get(&src2.id).unwrap();
+
+                let msrc1 = alloc_src_reg(msrc1, src1.id, REGISTER_NUM - 1, &mut reg_addr_map, &mut result);
+                let msrc2 = alloc_src_reg(msrc2, src2.id, REGISTER_NUM,     &mut reg_addr_map, &mut result);
+
+                match alloc_dst_reg(mdst, dst.id, &mut reg_addr_map) {
+                    (reg, None) => result.push(OpeCode::Add{ dst: reg, src1: msrc1, src2: msrc2 }),
+                    (reg, Some(addr)) => {
+                        result.push(OpeCode::Add{ dst: reg.clone(), src1: msrc1, src2: msrc2 });
+                        result.push(OpeCode::Store{ dst: addr, src: reg});
+                    },
+                }
             },
             OpeCode::Store { dst, src } => {
-                let &src = reg_map.get(&src.id).unwrap();
-                result.push(OpeCode::Store{ dst: dst, src: reg!(src) });
+                let &msrc = reg_map.get(&src.id).unwrap();
+                let msrc = alloc_src_reg(msrc, src.id, REGISTER_NUM, &mut reg_addr_map, &mut result);
+                result.push(OpeCode::Store{ dst: dst, src: msrc });
             },
             OpeCode::Load { dst, src } => {
-                let &dst = reg_map.get(&dst.id).unwrap();
-                result.push(OpeCode::Load{ dst: reg!(dst), src: src });
+                let &mdst = reg_map.get(&dst.id).unwrap();
+
+                match alloc_dst_reg(mdst, dst.id, &mut reg_addr_map) {
+                    (reg, None) => result.push(OpeCode::Load{ dst: reg, src: src }),
+                    (reg, Some(addr)) => {
+                        result.push(OpeCode::Load{ dst: reg.clone(), src: src });
+                        result.push(OpeCode::Store{ dst: addr, src: reg});
+                    },
+                }
             },
             OpeCode::Print { src } => {
-                let &src = reg_map.get(&src.id).unwrap();
-                result.push(OpeCode::Print{ src: reg!(src) });
+                let &msrc = reg_map.get(&src.id).unwrap();
+                let msrc = alloc_src_reg(msrc, src.id, REGISTER_NUM, &mut reg_addr_map, &mut result);
+                result.push(OpeCode::Print{ src: msrc });
             },
         }
     }
@@ -489,8 +539,9 @@ fn allocate_registers2(opcodes: Vec<OpeCode>) -> Vec<OpeCode> {
     result
 }
 
-fn run_vm(opcodes: Vec<OpeCode>) {
-    let mut reg = [0; REGISTER_NUM + 1];
+fn run_vm(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) {
+    let mut reg = Vec::new();
+    reg.resize(REGISTER_NUM + 1, 0);
     let mut mem = [0; 1024];
 
     for opcode in &opcodes {
@@ -514,17 +565,17 @@ fn run_vm(opcodes: Vec<OpeCode>) {
         }
     }
 
-    println!("");
-    println!("registers");
-    for i in 1..reg.len() {
-        println!("  %{} = {}", i, reg[i]);
-    }
-    println!("memory");
-    for addr in 0..mem.len() {
-        if mem[addr] != 0 {
-            println!("  {}: {}", addr, mem[addr]);
-        }
-    }
+    // println!("");
+    // println!("registers");
+    // for i in 1..reg.len() {
+    //     println!("  %{} = {}", i, reg[i]);
+    // }
+    // println!("memory");
+    // for addr in 0..mem.len() {
+    //     if mem[addr] != 0 {
+    //         println!("  {}: {}", addr, mem[addr]);
+    //     }
+    // }
 }
 
 fn main() {
@@ -537,7 +588,7 @@ fn main() {
         // OpeCode::Add{ dst: reg!(5), src1: reg!(1), src2: reg!(2)},
         // OpeCode::Add{ dst: reg!(6), src1: reg!(5), src2: reg!(3)},
         // OpeCode::Add{ dst: reg!(7), src1: reg!(6), src2: reg!(4)},
-
+        //
         // OpeCode::Print{ src: reg!(7) }, // => 10
 
         OpeCode::LdI{ dst: reg!(1), value: int!(1)},
@@ -556,18 +607,35 @@ fn main() {
         OpeCode::Print{ src: reg!(9) }, // => 11
     ];
 
-    for opcode in &opcodes {
-        println!("{}", opcode.to_string());
+    // for opcode in &opcodes {
+    //     println!("{}", opcode.to_string());
+    // }
+
+    // println!("");
+
+    println!("reg num, algo1, algo2");
+
+    for i in 4..10 {
+        let opcodes1 = allocate_registers1(opcodes.clone(), i);
+        let opcodes2 = allocate_registers2(opcodes.clone(), i);
+
+        println!("algo1");
+        for opcode in &opcodes1 {
+            println!("{}", opcode.to_string());
+        }
+        println!("");
+
+        println!("algo2");
+        for opcode in &opcodes2 {
+            println!("{}", opcode.to_string());
+        }
+        println!("");
+
+        println!("{}, {}, {}", i, opcodes1.len(), opcodes2.len());
+
+        // run_vm(opcodes1, i);
+        // run_vm(opcodes2, i);
     }
 
-    println!("");
 
-    // let opcodes2 = allocate_registers1(opcodes);
-    let opcodes2 = allocate_registers2(opcodes);
-
-    for opcode in &opcodes2 {
-        println!("{}", opcode.to_string());
-    }
-
-    run_vm(opcodes2);
 }
