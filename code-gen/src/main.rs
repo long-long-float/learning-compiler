@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::fmt;
 
 trait Operand {
@@ -120,16 +119,16 @@ macro_rules! int {
 }
 
 // 先頭からN-2までのレジスタを割り当てて、残りはStore, Loadしてメモリに置く
-fn allocate_registers1(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCode> {
+fn allocate_registers1(opcodes: Vec<OpeCode>, register_num: usize) -> Vec<OpeCode> {
     let mut result: Vec<OpeCode> = Vec::new();
 
     // register id -> address
     let mut reg_addr_map: HashMap<usize, usize> = HashMap::new();
 
     let alloc_dst_reg = |reg: Register, reg_addr_map: &mut HashMap<usize, usize>| {
-        let temp_reg = REGISTER_NUM - 1;
+        let temp_reg = register_num - 1;
 
-        if reg.id <= REGISTER_NUM - 2 {
+        if reg.id <= register_num - 2 {
             (reg, None)
         } else {
             let new_addr = reg_addr_map.len();
@@ -140,7 +139,7 @@ fn allocate_registers1(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
     };
 
     let alloc_src_reg = |reg: Register, temp_reg: usize, reg_addr_map: &mut HashMap<usize, usize>, result: &mut Vec<OpeCode>| {
-        if reg.id <= REGISTER_NUM - 2 {
+        if reg.id <= register_num - 2 {
             reg
         } else {
             let new_addr = reg_addr_map.len();
@@ -166,8 +165,8 @@ fn allocate_registers1(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
                 }
             },
             OpeCode::Add { dst, src1, src2 } => {
-                let src1 = alloc_src_reg(src1, REGISTER_NUM - 1, &mut reg_addr_map, &mut result);
-                let src2 = alloc_src_reg(src2, REGISTER_NUM,     &mut reg_addr_map, &mut result);
+                let src1 = alloc_src_reg(src1, register_num - 1, &mut reg_addr_map, &mut result);
+                let src2 = alloc_src_reg(src2, register_num,     &mut reg_addr_map, &mut result);
 
                 match alloc_dst_reg(dst, &mut reg_addr_map) {
                     (reg, None) => result.push(OpeCode::Add{ dst: reg, src1: src1, src2: src2 }),
@@ -178,7 +177,7 @@ fn allocate_registers1(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
                 }
             },
             OpeCode::Store { dst, src } => {
-                let src = alloc_src_reg(src, REGISTER_NUM, &mut reg_addr_map, &mut result);
+                let src = alloc_src_reg(src, register_num, &mut reg_addr_map, &mut result);
                 result.push(OpeCode::Store{ dst: dst, src: src });
             },
             OpeCode::Load { dst, src } => {
@@ -191,7 +190,7 @@ fn allocate_registers1(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
                 }
             },
             OpeCode::Print { src } => {
-                let src = alloc_src_reg(src, REGISTER_NUM, &mut reg_addr_map, &mut result);
+                let src = alloc_src_reg(src, register_num, &mut reg_addr_map, &mut result);
                 result.push(OpeCode::Print{ src: src });
             },
         }
@@ -227,7 +226,7 @@ fn is_empty<T: PartialEq>(matrix_graph: &Vec<Vec<T>>, null_value: T) -> bool {
 }
 
 // Chatinのアルゴリズム(干渉グラフを用いる)
-fn allocate_registers2(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCode> {
+fn allocate_registers2(opcodes: Vec<OpeCode>, max_register_num: usize) -> Vec<OpeCode> {
     // レジスタは1から順に使用されていると仮定
     let register_num = opcodes.iter().map(|op| {
         match op.clone() {
@@ -374,7 +373,7 @@ fn allocate_registers2(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
             let im = interf_matrix_cloned.clone();
             let degs = im.iter().map(|row| row.iter().filter(|&&cell| cell).count()).collect::<Vec<_>>();
 
-            let threshold = REGISTER_NUM - 2;
+            let threshold = max_register_num - 2;
 
             let reg_id = degs.iter().enumerate().position(|(reg_id, &deg)| {
                     deg < threshold && removed_regs.iter().find(|&&r| r == reg_id) == None
@@ -396,7 +395,7 @@ fn allocate_registers2(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
             // 塗る
             for &reg_id in removed_regs.iter().rev() {
                 let mut is_painted: Vec<bool> = Vec::new();
-                is_painted.resize(REGISTER_NUM + 1, false);
+                is_painted.resize(max_register_num + 1, false);
 
                 for (reg_id2, &connected) in interf_matrix[reg_id].iter().enumerate() {
                     if connected {
@@ -420,17 +419,6 @@ fn allocate_registers2(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
             break;
         } else {
             // spill
-            // for &reg_id in &spill_list {
-            //     for i in 0..live_range[reg_id].len() {
-            //         if live_range[reg_id][i].is_used() {
-            //             let mut new_range: Vec<LiveRangeCell> = Vec::new();
-            //             new_range.resize(opcodes.len(), LiveRangeCell::Dead);
-            //             new_range[i] = LiveRangeCell::Birth;
-            //             live_range.push(new_range);
-            //         }
-            //     }
-            // }
-
             spilled_reg = spill_list.clone();
 
             for &reg_id in &spill_list {
@@ -444,10 +432,10 @@ fn allocate_registers2(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
     // for (r1, r2) in &reg_map {
     //     println!("{} -> {}", r1, r2);
     // }
-
-    for &reg_id in &spilled_reg {
-        println!("{}", reg_id);
-    }
+    //
+    // for &reg_id in &spilled_reg {
+    //     println!("{}", reg_id);
+    // }
 
     let mut result: Vec<OpeCode> = Vec::new();
 
@@ -456,7 +444,7 @@ fn allocate_registers2(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
 
     // for spilled registers
     let alloc_dst_reg = |reg_id: usize, original_reg_id: usize, reg_addr_map: &mut HashMap<usize, usize>| {
-        let temp_reg = REGISTER_NUM - 1;
+        let temp_reg = max_register_num - 1;
 
         if spilled_reg.iter().find(|&&r| r == reg_id) == None {
             (reg!(reg_id), None)
@@ -470,7 +458,7 @@ fn allocate_registers2(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
 
     let alloc_src_reg = |reg_id: usize, original_reg_id: usize, temp_reg: usize, reg_addr_map: &mut HashMap<usize, usize>, result: &mut Vec<OpeCode>| {
         if spilled_reg.iter().find(|&&r| r == reg_id) == None {
-            reg!(reg_id)
+            None
         } else {
             let new_addr = reg_addr_map.len();
             reg_addr_map.entry(original_reg_id).or_insert(new_addr);
@@ -478,7 +466,7 @@ fn allocate_registers2(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
             let addr = Integer::new(*reg_addr_map.get(&original_reg_id).unwrap() as i32);
             result.push(OpeCode::Load{ dst: reg!(temp_reg), src: addr });
 
-            reg!(temp_reg)
+            Some(reg!(temp_reg))
         }
     };
 
@@ -486,10 +474,11 @@ fn allocate_registers2(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
         let opcode = opcode.clone();
         match opcode {
             OpeCode::LdI { dst, value } => {
-                let &mdst = reg_map.get(&dst.id).unwrap();
-
-                match alloc_dst_reg(mdst, dst.id, &mut reg_addr_map) {
-                    (reg, None) => result.push(OpeCode::LdI{ dst: reg, value: value }),
+                match alloc_dst_reg(dst.id, dst.id, &mut reg_addr_map) {
+                    (reg, None) => {
+                        let &dst = reg_map.get(&reg.id).unwrap();
+                        result.push(OpeCode::LdI{ dst: reg!(dst), value: value });
+                    },
                     (reg, Some(addr)) => {
                         result.push(OpeCode::LdI{ dst: reg.clone(), value: value});
                         result.push(OpeCode::Store{ dst: addr, src: reg});
@@ -497,31 +486,34 @@ fn allocate_registers2(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
                 }
             },
             OpeCode::Add { dst, src1, src2 } => {
-                let &mdst = reg_map.get(&dst.id).unwrap();
-                let &msrc1 = reg_map.get(&src1.id).unwrap();
-                let &msrc2 = reg_map.get(&src2.id).unwrap();
 
-                let msrc1 = alloc_src_reg(msrc1, src1.id, REGISTER_NUM - 1, &mut reg_addr_map, &mut result);
-                let msrc2 = alloc_src_reg(msrc2, src2.id, REGISTER_NUM,     &mut reg_addr_map, &mut result);
+                let src1 = alloc_src_reg(src1.id, src1.id, max_register_num - 1, &mut reg_addr_map, &mut result)
+                           .unwrap_or_else(|| reg!(*reg_map.get(&src1.id).unwrap()));
+                let src2 = alloc_src_reg(src2.id, src2.id, max_register_num,     &mut reg_addr_map, &mut result)
+                           .unwrap_or_else(|| reg!(*reg_map.get(&src2.id).unwrap()));
 
-                match alloc_dst_reg(mdst, dst.id, &mut reg_addr_map) {
-                    (reg, None) => result.push(OpeCode::Add{ dst: reg, src1: msrc1, src2: msrc2 }),
+                match alloc_dst_reg(dst.id, dst.id, &mut reg_addr_map) {
+                    (reg, None) => {
+                        let &dst = reg_map.get(&reg.id).unwrap();
+                        result.push(OpeCode::Add{ dst: reg!(dst), src1: src1, src2: src2 });
+                    },
                     (reg, Some(addr)) => {
-                        result.push(OpeCode::Add{ dst: reg.clone(), src1: msrc1, src2: msrc2 });
-                        result.push(OpeCode::Store{ dst: addr, src: reg});
+                        result.push(OpeCode::Add{ dst: reg.clone(), src1: src1, src2: src2 });
+                        result.push(OpeCode::Store{ dst: addr, src: reg });
                     },
                 }
             },
             OpeCode::Store { dst, src } => {
-                let &msrc = reg_map.get(&src.id).unwrap();
-                let msrc = alloc_src_reg(msrc, src.id, REGISTER_NUM, &mut reg_addr_map, &mut result);
-                result.push(OpeCode::Store{ dst: dst, src: msrc });
+                let src = alloc_src_reg(src.id, src.id, max_register_num, &mut reg_addr_map, &mut result)
+                           .unwrap_or_else(|| reg!(*reg_map.get(&src.id).unwrap()));
+                result.push(OpeCode::Store{ dst: dst, src: src });
             },
             OpeCode::Load { dst, src } => {
-                let &mdst = reg_map.get(&dst.id).unwrap();
-
-                match alloc_dst_reg(mdst, dst.id, &mut reg_addr_map) {
-                    (reg, None) => result.push(OpeCode::Load{ dst: reg, src: src }),
+                match alloc_dst_reg(dst.id, dst.id, &mut reg_addr_map) {
+                    (reg, None) => {
+                        let &dst = reg_map.get(&reg.id).unwrap();
+                        result.push(OpeCode::Load{ dst: reg!(dst), src: src });
+                    },
                     (reg, Some(addr)) => {
                         result.push(OpeCode::Load{ dst: reg.clone(), src: src });
                         result.push(OpeCode::Store{ dst: addr, src: reg});
@@ -529,9 +521,9 @@ fn allocate_registers2(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
                 }
             },
             OpeCode::Print { src } => {
-                let &msrc = reg_map.get(&src.id).unwrap();
-                let msrc = alloc_src_reg(msrc, src.id, REGISTER_NUM, &mut reg_addr_map, &mut result);
-                result.push(OpeCode::Print{ src: msrc });
+                let src = alloc_src_reg(src.id, src.id, max_register_num, &mut reg_addr_map, &mut result)
+                           .unwrap_or_else(|| reg!(*reg_map.get(&src.id).unwrap()));
+                result.push(OpeCode::Print{ src: src });
             },
         }
     }
@@ -539,9 +531,9 @@ fn allocate_registers2(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) -> Vec<OpeCod
     result
 }
 
-fn run_vm(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) {
+fn run_vm(opcodes: Vec<OpeCode>, register_num: usize) {
     let mut reg = Vec::new();
-    reg.resize(REGISTER_NUM + 1, 0);
+    reg.resize(register_num + 1, 0);
     let mut mem = [0; 1024];
 
     for opcode in &opcodes {
@@ -565,17 +557,17 @@ fn run_vm(opcodes: Vec<OpeCode>, REGISTER_NUM: usize) {
         }
     }
 
-    // println!("");
-    // println!("registers");
-    // for i in 1..reg.len() {
-    //     println!("  %{} = {}", i, reg[i]);
-    // }
-    // println!("memory");
-    // for addr in 0..mem.len() {
-    //     if mem[addr] != 0 {
-    //         println!("  {}: {}", addr, mem[addr]);
-    //     }
-    // }
+    println!("");
+    println!("registers");
+    for i in 1..reg.len() {
+        println!("  %{} = {}", i, reg[i]);
+    }
+    println!("memory");
+    for addr in 0..mem.len() {
+        if mem[addr] != 0 {
+            println!("  {}: {}", addr, mem[addr]);
+        }
+    }
 }
 
 fn main() {
@@ -619,23 +611,21 @@ fn main() {
         let opcodes1 = allocate_registers1(opcodes.clone(), i);
         let opcodes2 = allocate_registers2(opcodes.clone(), i);
 
-        println!("algo1");
-        for opcode in &opcodes1 {
-            println!("{}", opcode.to_string());
-        }
-        println!("");
-
-        println!("algo2");
-        for opcode in &opcodes2 {
-            println!("{}", opcode.to_string());
-        }
-        println!("");
+        // println!("algo1");
+        // for opcode in &opcodes1 {
+        //     println!("{}", opcode.to_string());
+        // }
+        // println!("");
+        //
+        // println!("algo2");
+        // for opcode in &opcodes2 {
+        //     println!("{}", opcode.to_string());
+        // }
+        // println!("");
 
         println!("{}, {}, {}", i, opcodes1.len(), opcodes2.len());
 
         // run_vm(opcodes1, i);
         // run_vm(opcodes2, i);
     }
-
-
 }
